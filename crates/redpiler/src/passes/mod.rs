@@ -8,14 +8,16 @@ mod identify_nodes;
 mod input_search;
 mod prune_orphans;
 mod unreachable_output;
+mod chain_coalesce;
 
-use mchprs_world::World;
+use mchprs_world::{TickEntry, World};
 
-use super::compile_graph::CompileGraph;
+use super::compile_graph::{CompileGraph, NodeIdx};
 use super::task_monitor::TaskMonitor;
 use super::{CompilerInput, CompilerOptions};
 use std::sync::Arc;
 use std::time::Instant;
+use rustc_hash::FxHashMap;
 use tracing::trace;
 
 pub const fn make_default_pass_manager<'w, W: World>() -> PassManager<'w, W> {
@@ -23,11 +25,12 @@ pub const fn make_default_pass_manager<'w, W: World>() -> PassManager<'w, W> {
         &identify_nodes::IdentifyNodes,
         &input_search::InputSearch,
         &clamp_weights::ClampWeights,
-        &dedup_links::DedupLinks,
-        &constant_fold::ConstantFold,
-        &unreachable_output::UnreachableOutput,
-        &constant_coalesce::ConstantCoalesce,
-        &coalesce::Coalesce,
+        //&dedup_links::DedupLinks,
+        //&constant_fold::ConstantFold,
+        //&unreachable_output::UnreachableOutput,
+        //&constant_coalesce::ConstantCoalesce,
+        //&coalesce::Coalesce,
+        &chain_coalesce::ChainCoalesce,
         &prune_orphans::PruneOrphans,
         &export_graph::ExportGraph,
     ])
@@ -45,6 +48,8 @@ impl<'p, W: World> PassManager<'p, W> {
     pub fn run_passes(
         &self,
         options: &CompilerOptions,
+        ticks: &mut Vec<TickEntry>,
+        link_breaks: &mut FxHashMap<NodeIdx, usize>,
         input: &CompilerInput<'_, W>,
         monitor: Arc<TaskMonitor>,
     ) -> CompileGraph {
@@ -68,7 +73,7 @@ impl<'p, W: World> PassManager<'p, W> {
             monitor.set_message(pass.status_message().to_string());
             let start = Instant::now();
 
-            pass.run_pass(&mut graph, options, input);
+            pass.run_pass(&mut graph, options, ticks, link_breaks, input);
 
             trace!("Completed pass in {:?}", start.elapsed());
             trace!("node_count: {}", graph.node_count());
@@ -85,6 +90,8 @@ pub trait Pass<W: World> {
         &self,
         graph: &mut CompileGraph,
         options: &CompilerOptions,
+        ticks: &mut Vec<TickEntry>,
+        link_breaks: &mut FxHashMap<NodeIdx, usize>,
         input: &CompilerInput<'_, W>,
     );
 

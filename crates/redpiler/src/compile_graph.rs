@@ -10,7 +10,13 @@ pub enum NodeType {
         delay: u8,
         facing_diode: bool,
     },
-    Torch,
+    Torch {
+        invert: bool,
+    },
+    Chain {
+        delay: u8,
+        facing_diode: bool,
+    },
     Comparator {
         mode: ComparatorMode,
         far_input: Option<u8>,
@@ -95,7 +101,7 @@ pub enum LinkType {
     Side,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CompileLink {
     pub ty: LinkType,
     pub ss: u8,

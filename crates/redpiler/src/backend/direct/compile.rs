@@ -3,14 +3,13 @@ use crate::{CompilerOptions, TaskMonitor};
 use itertools::Itertools;
 use mchprs_blocks::blocks::{Block, Instrument};
 use mchprs_blocks::BlockPos;
-use mchprs_world::TickEntry;
+use mchprs_world::{TickEntry};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 use tracing::trace;
-
 use super::node::{ForwardLink, Node, NodeId, NodeInput, NodeType, Nodes, NonMaxU8};
 use super::DirectBackend;
 
@@ -99,7 +98,20 @@ fn compile_node(
             delay: *delay,
             facing_diode: *facing_diode,
         },
-        CNodeType::Torch => NodeType::Torch,
+        CNodeType::Torch {
+            invert
+        } => NodeType::Torch {
+            invert: *invert
+        },
+        CNodeType::Chain {
+            delay,
+            facing_diode,
+        } => {
+            NodeType::Chain {
+                delay: *delay,
+                facing_diode: *facing_diode,
+            }
+        },
         CNodeType::Comparator {
             mode,
             far_input,
@@ -141,13 +153,18 @@ pub fn compile(
     backend: &mut DirectBackend,
     graph: CompileGraph,
     ticks: Vec<TickEntry>,
+    link_breaks: FxHashMap<NodeIdx, usize>,
     options: &CompilerOptions,
     _monitor: Arc<TaskMonitor>,
 ) {
     // Create a mapping from compile to backend node indices
     let mut nodes_map = FxHashMap::with_capacity_and_hasher(graph.node_count(), Default::default());
     for node in graph.node_indices() {
-        nodes_map.insert(node, nodes_map.len());
+        let idx = nodes_map.len();
+        nodes_map.insert(node, idx);
+        if let Some(tick) = link_breaks.get(&node) {
+            backend.schedule_link_break(unsafe { NodeId::from_index(idx) }, *tick);
+        }
     }
     let nodes_len = nodes_map.len();
 
@@ -185,10 +202,14 @@ pub fn compile(
     // Schedule backend ticks
     for entry in ticks {
         if let Some(node) = backend.pos_map.get(&entry.pos) {
-            backend
-                .scheduler
-                .schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
-            backend.nodes[*node].pending_tick = true;
+            if entry.ticks_left == 0 {
+                backend.tick_node(*node);
+            } else {
+                backend
+                    .scheduler
+                    .schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
+                backend.nodes[*node].pending_tick = true;
+            }
         }
     }
 

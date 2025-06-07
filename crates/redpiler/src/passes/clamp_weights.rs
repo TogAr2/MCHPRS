@@ -1,12 +1,20 @@
+use rustc_hash::FxHashMap;
 use super::Pass;
-use crate::compile_graph::CompileGraph;
+use crate::compile_graph::{CompileGraph, NodeIdx};
 use crate::{CompilerInput, CompilerOptions};
-use mchprs_world::World;
+use mchprs_world::{TickEntry, World};
 
 pub struct ClampWeights;
 
 impl<W: World> Pass<W> for ClampWeights {
-    fn run_pass(&self, graph: &mut CompileGraph, _: &CompilerOptions, _: &CompilerInput<'_, W>) {
+    fn run_pass(
+        &self,
+        graph: &mut CompileGraph,
+        _options: &CompilerOptions,
+        _ticks: &mut Vec<TickEntry>,
+        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        _input: &CompilerInput<'_, W>
+    ) {
         graph.retain_edges(|g, edge| g[edge].ss < 15);
     }
 

@@ -3,7 +3,7 @@ use crate::compile_graph::{CompileGraph, LinkType as CLinkType, NodeIdx, NodeTyp
 use crate::{CompilerInput, CompilerOptions};
 use itertools::Itertools;
 use mchprs_blocks::blocks::ComparatorMode as CComparatorMode;
-use mchprs_world::World;
+use mchprs_world::{TickEntry, World};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use redpiler_graph::{
@@ -53,7 +53,8 @@ fn convert_node(
     Node {
         ty: match node.ty {
             CNodeType::Repeater { delay, .. } => NodeType::Repeater(delay),
-            CNodeType::Torch => NodeType::Torch,
+            CNodeType::Torch { invert } => NodeType::Torch(invert),
+            CNodeType::Chain { delay, .. } => NodeType::Chain(delay),
             CNodeType::Comparator { mode, .. } => NodeType::Comparator(match mode {
                 CComparatorMode::Compare => ComparatorMode::Compare,
                 CComparatorMode::Subtract => ComparatorMode::Subtract,
@@ -92,7 +93,14 @@ fn convert_node(
 pub struct ExportGraph;
 
 impl<W: World> Pass<W> for ExportGraph {
-    fn run_pass(&self, graph: &mut CompileGraph, _: &CompilerOptions, _: &CompilerInput<'_, W>) {
+    fn run_pass(
+        &self,
+        graph: &mut CompileGraph,
+        _options: &CompilerOptions,
+        _ticks: &mut Vec<TickEntry>,
+        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        _input: &CompilerInput<'_, W>,
+    ) {
         let mut nodes_map =
             FxHashMap::with_capacity_and_hasher(graph.node_count(), Default::default());
         for node in graph.node_indices() {

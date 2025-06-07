@@ -2,10 +2,11 @@ pub mod direct;
 
 use std::sync::Arc;
 
-use super::compile_graph::CompileGraph;
+use super::compile_graph::{CompileGraph, NodeIdx};
 use super::task_monitor::TaskMonitor;
 use super::CompilerOptions;
 use enum_dispatch::enum_dispatch;
+use rustc_hash::FxHashMap;
 use mchprs_blocks::BlockPos;
 use mchprs_world::{TickEntry, World};
 
@@ -15,6 +16,7 @@ pub trait JITBackend {
         &mut self,
         graph: CompileGraph,
         ticks: Vec<TickEntry>,
+        link_breaks: FxHashMap<NodeIdx, usize>,
         options: &CompilerOptions,
         monitor: Arc<TaskMonitor>,
     );

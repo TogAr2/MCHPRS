@@ -37,13 +37,36 @@ pub(super) fn update_node(
                 schedule_tick(scheduler, node_id, node, delay as usize, priority);
             }
         }
-        NodeType::Torch => {
+        NodeType::Torch { invert } => {
             if node.pending_tick {
                 return;
             }
-            let should_be_powered = !get_bool_input(node);
+            let mut should_be_powered = get_bool_input(node);
+            if invert { should_be_powered = !should_be_powered };
             if node.powered != should_be_powered {
                 schedule_tick(scheduler, node_id, node, 1, TickPriority::Normal);
+            }
+        }
+        NodeType::Chain {
+            delay,
+            facing_diode,
+        } => {
+            // if node.pending_tick {
+            //     return;
+            // }
+
+            let should_be_powered = get_bool_input(node);
+            if should_be_powered != node.locked {
+                node.locked = should_be_powered; // We use locked as prev_powered to save space
+ 
+                let priority = if facing_diode {
+                    TickPriority::Highest
+                } else if !should_be_powered {
+                    TickPriority::Higher
+                } else {
+                    TickPriority::High
+                };
+                schedule_tick(scheduler, node_id, node, delay as usize, priority);
             }
         }
         NodeType::Comparator {

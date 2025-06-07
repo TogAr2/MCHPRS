@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use super::Pass;
 use crate::compile_graph::{CompileGraph, CompileNode, NodeIdx, NodeState, NodeType};
 use crate::{CompilerInput, CompilerOptions};
-use mchprs_world::World;
+use mchprs_world::{TickEntry, World};
 use petgraph::unionfind::UnionFind;
 use petgraph::visit::{EdgeRef, IntoEdgeReferences, NodeIndexable};
 use petgraph::Direction;
@@ -12,7 +12,14 @@ use rustc_hash::FxHashMap;
 pub struct ConstantCoalesce;
 
 impl<W: World> Pass<W> for ConstantCoalesce {
-    fn run_pass(&self, graph: &mut CompileGraph, _: &CompilerOptions, _: &CompilerInput<'_, W>) {
+    fn run_pass(
+        &self,
+        graph: &mut CompileGraph,
+        _options: &CompilerOptions,
+        _ticks: &mut Vec<TickEntry>,
+        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        _input: &CompilerInput<'_, W>
+    ) {
         let mut vertex_sets = UnionFind::new(graph.node_bound());
         for edge in graph.edge_references() {
             let (src, dest) = (edge.source(), edge.target());

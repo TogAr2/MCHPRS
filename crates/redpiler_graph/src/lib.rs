@@ -32,7 +32,8 @@ pub struct Link {
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum NodeType {
     Repeater(u8),
-    Torch,
+    Torch(bool),
+    Chain(u8),
     Comparator(ComparatorMode),
     Lamp,
     Button,

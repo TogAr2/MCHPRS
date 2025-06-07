@@ -6,7 +6,7 @@ mod tick;
 mod update;
 
 use super::JITBackend;
-use crate::compile_graph::CompileGraph;
+use crate::compile_graph::{CompileGraph, NodeIdx};
 use crate::task_monitor::TaskMonitor;
 use crate::{block_powered_mut, CompilerOptions};
 use mchprs_blocks::block_entities::BlockEntity;
@@ -18,8 +18,9 @@ use mchprs_world::{TickEntry, TickPriority};
 use node::{Node, NodeId, NodeType, Nodes};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
-use std::{fmt, mem};
+use std::{array, fmt, mem};
 use tracing::{debug, warn};
+use crate::backend::direct::update::update_node;
 
 #[derive(Default, Clone)]
 struct Queues([Vec<NodeId>; TickScheduler::NUM_PRIORITIES]);
@@ -32,15 +33,24 @@ impl Queues {
     }
 }
 
-#[derive(Default)]
-struct TickScheduler {
+pub(crate) struct TickScheduler {
     queues_deque: [Queues; Self::NUM_QUEUES],
     pos: usize,
 }
 
+impl Default for TickScheduler {
+    fn default() -> Self {
+        let queues_deque = array::from_fn(|_| Queues::default());
+        Self {
+            queues_deque,
+            pos: 0,
+        }
+    }
+}
+
 impl TickScheduler {
     const NUM_PRIORITIES: usize = 4;
-    const NUM_QUEUES: usize = 16;
+    pub(crate) const NUM_QUEUES: usize = 132; //TODO chain cannot be so big its delay exceeds this number
 
     fn reset<W: World>(&mut self, world: &mut W, blocks: &[Option<(BlockPos, Block)>]) {
         for (idx, queues) in self.queues_deque.iter().enumerate() {
@@ -115,11 +125,22 @@ pub struct DirectBackend {
     scheduler: TickScheduler,
     events: Vec<Event>,
     noteblock_info: Vec<(BlockPos, Instrument, u32)>,
+    link_break: FxHashMap<usize, Vec<NodeId>>
 }
 
 impl DirectBackend {
     fn schedule_tick(&mut self, node_id: NodeId, delay: usize, priority: TickPriority) {
         self.scheduler.schedule_tick(node_id, delay, priority);
+    }
+
+    fn schedule_link_break(&mut self, node_id: NodeId, delay: usize) {
+        self.link_break.entry(delay).or_insert(Vec::new()).push(node_id);
+    }
+
+    fn break_link(&mut self, node_id: NodeId) {
+        self.set_node(node_id, false, 0);
+        let node = &mut self.nodes[node_id];
+        node.updates.clear();
     }
 
     fn set_node(&mut self, node_id: NodeId, powered: bool, new_power: u8) {
@@ -156,7 +177,7 @@ impl DirectBackend {
                 *inputs.ss_counts.get_unchecked_mut(new_power as usize) += 1;
             }
 
-            update::update_node(
+            update_node(
                 &mut self.scheduler,
                 &mut self.events,
                 &mut self.nodes,
@@ -234,6 +255,14 @@ impl JITBackend for DirectBackend {
     fn tick(&mut self) {
         let mut queues = self.scheduler.queues_this_tick();
 
+        if !self.link_break.is_empty() {
+            if let Some(nodes) = self.link_break.remove(&self.scheduler.pos) {
+                for node in nodes {
+                    self.break_link(node);
+                }
+            }
+        }
+
         for node_id in queues.drain_iter() {
             self.tick_node(node_id);
         }
@@ -274,10 +303,11 @@ impl JITBackend for DirectBackend {
         &mut self,
         graph: CompileGraph,
         ticks: Vec<TickEntry>,
+        link_breaks: FxHashMap<NodeIdx, usize>,
         options: &CompilerOptions,
         monitor: Arc<TaskMonitor>,
     ) {
-        compile::compile(self, graph, ticks, options, monitor);
+        compile::compile(self, graph, ticks, link_breaks, options, monitor);
     }
 
     fn has_pending_ticks(&self) -> bool {
@@ -330,6 +360,11 @@ fn last_index_positive(array: &[u8; 16]) -> u32 {
     }
 }
 
+fn get_ss_count_for_max(array: &[u8; 16]) -> u8 {
+    let index = last_index_positive(array);
+    array[index as usize]
+}
+
 fn get_all_input(node: &Node) -> (u8, u8) {
     let input_power = last_index_positive(&node.default_inputs.ss_counts) as u8;
 
@@ -360,7 +395,8 @@ impl fmt::Display for DirectBackend {
             }
             let label = match node.ty {
                 NodeType::Repeater { delay, .. } => format!("Repeater({})", delay),
-                NodeType::Torch => format!("Torch"),
+                NodeType::Torch { invert } => format!("Torch({})", invert),
+                NodeType::Chain { delay, .. } => format!("Chain({})", delay),
                 NodeType::Comparator { mode, .. } => format!(
                     "Comparator({})",
                     match mode {

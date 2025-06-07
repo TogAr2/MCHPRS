@@ -10,7 +10,7 @@ fn main() {
     // Setup logging
     let logfile = tracing_appender::rolling::daily("./logs", "mchprs.log");
     let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
+        .with_default_directive(LevelFilter::DEBUG.into())
         .with_env_var("MCHPRS_LOG")
         .from_env_lossy();
     tracing_subscriber::fmt()

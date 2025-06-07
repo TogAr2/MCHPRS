@@ -5,7 +5,7 @@ use mchprs_blocks::blocks::Block;
 use mchprs_blocks::BlockDirection;
 use mchprs_world::World;
 
-test_all_backends!(lever_on_off);
+test_all_backends!(lever_on_off, optimize=true);
 fn lever_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
 
@@ -22,7 +22,7 @@ fn lever_on_off(backend: TestBackend) {
     runner.check_block_powered(lever_pos, false);
 }
 
-test_all_backends!(trapdoor_on_off);
+test_all_backends!(trapdoor_on_off, optimize=true);
 fn trapdoor_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
     let trapdoor_pos = pos(1, 0, 0);
@@ -41,7 +41,7 @@ fn trapdoor_on_off(backend: TestBackend) {
     runner.check_block_powered(trapdoor_pos, false);
 }
 
-test_all_backends!(lamp_on_off);
+test_all_backends!(lamp_on_off, optimize=true);
 fn lamp_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
     let lamp_pos = pos(1, 0, 0);
@@ -61,7 +61,7 @@ fn lamp_on_off(backend: TestBackend) {
     runner.check_block_powered(lamp_pos, false);
 }
 
-test_all_backends!(wall_torch_on_off);
+test_all_backends!(wall_torch_on_off, optimize=false);
 fn wall_torch_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
     let torch_pos = pos(1, 0, 0);
@@ -88,7 +88,7 @@ fn wall_torch_on_off(backend: TestBackend) {
     runner.check_block_powered(torch_pos, true);
 }
 
-test_all_backends!(torch_on_off);
+test_all_backends!(torch_on_off, optimize=false);
 fn torch_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 2, 0);
     let torch_pos = pos(2, 2, 0);
@@ -110,7 +110,7 @@ fn torch_on_off(backend: TestBackend) {
     runner.check_block_powered(torch_pos, true);
 }
 
-test_all_backends!(repeater_on_off);
+test_all_backends!(repeater_on_off, optimize=false);
 fn repeater_on_off(backend: TestBackend) {
     let lever_pos = pos(0, 2, 0);
     let trapdoor_pos = pos(2, 1, 0);
@@ -118,7 +118,7 @@ fn repeater_on_off(backend: TestBackend) {
     for delay in 1..=4 {
         let mut world = TestWorld::new(1);
         make_lever(&mut world, lever_pos);
-        make_repeater(&mut world, pos(1, 1, 0), delay as u8, BlockDirection::West);
+        make_repeater(&mut world, pos(1, 1, 0), delay as u8, BlockDirection::West, false);
         world.set_block(trapdoor_pos, trapdoor());
 
         let mut runner = BackendRunner::new(world, backend);
@@ -141,7 +141,7 @@ fn repeater_on_off(backend: TestBackend) {
     }
 }
 
-test_all_backends!(wire_barely_reaches);
+test_all_backends!(wire_barely_reaches, optimize=true);
 fn wire_barely_reaches(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
     let trapdoor_pos = pos(16, 1, 0);
@@ -162,7 +162,7 @@ fn wire_barely_reaches(backend: TestBackend) {
     runner.check_block_powered(trapdoor_pos, false);
 }
 
-test_all_backends!(wire_no_reach);
+test_all_backends!(wire_no_reach, optimize=true);
 fn wire_no_reach(backend: TestBackend) {
     let lever_pos = pos(0, 1, 0);
     let trapdoor_pos = pos(17, 1, 0);

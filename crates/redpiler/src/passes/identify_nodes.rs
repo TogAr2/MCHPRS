@@ -15,11 +15,10 @@ use mchprs_blocks::block_entities::BlockEntity;
 use mchprs_blocks::blocks::Block;
 use mchprs_blocks::{BlockDirection, BlockFace, BlockPos};
 use mchprs_redstone::{self, comparator, noteblock, wire};
-use mchprs_world::{for_each_block_optimized, World};
+use mchprs_world::{for_each_block_optimized, TickEntry, World};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use tracing::warn;
-
 pub struct IdentifyNodes;
 
 impl<W: World> Pass<W> for IdentifyNodes {
@@ -27,6 +26,8 @@ impl<W: World> Pass<W> for IdentifyNodes {
         &self,
         graph: &mut CompileGraph,
         options: &CompilerOptions,
+        _ticks: &mut Vec<TickEntry>,
+        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
         input: &CompilerInput<'_, W>,
     ) {
         let ignore_wires = options.optimize;
@@ -145,7 +146,7 @@ fn identify_block<W: World>(
             ),
         ),
         Block::RedstoneTorch { lit, .. } | Block::RedstoneWallTorch { lit, .. } => {
-            (NodeType::Torch, NodeState::simple(lit))
+            (NodeType::Torch { invert: true }, NodeState::simple(lit))
         }
         Block::RedstoneWire { wire } => (NodeType::Wire, NodeState::ss(wire.power)),
         Block::StoneButton { button } => (NodeType::Button, NodeState::simple(button.powered)),

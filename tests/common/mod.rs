@@ -132,9 +132,10 @@ struct RedpilerInstance {
 }
 
 impl RedpilerInstance {
-    fn new(world: &TestWorld, variant: BackendVariant) -> RedpilerInstance {
+    fn new(world: &TestWorld, variant: BackendVariant, optimize: bool) -> RedpilerInstance {
         let options = CompilerOptions {
             backend_variant: variant,
+            optimize,
             ..Default::default()
         };
         let mut compiler = Compiler::default();
@@ -150,7 +151,7 @@ impl RedpilerInstance {
 #[derive(Copy, Clone)]
 pub enum TestBackend {
     Redstone,
-    Redpiler(BackendVariant),
+    Redpiler(BackendVariant, bool),
 }
 
 pub struct BackendRunner {
@@ -165,8 +166,8 @@ impl BackendRunner {
                 world,
                 redpiler: None,
             },
-            TestBackend::Redpiler(variant) => BackendRunner {
-                redpiler: Some(RedpilerInstance::new(&world, variant)),
+            TestBackend::Redpiler(variant, optimize) => BackendRunner {
+                redpiler: Some(RedpilerInstance::new(&world, variant, optimize)),
                 world,
             },
         }
@@ -218,7 +219,8 @@ impl BackendRunner {
     }
 
     pub fn check_powered_for(&mut self, pos: BlockPos, powered: bool, ticks: usize) {
-        for _ in 0..ticks {
+        for i in 0..ticks {
+            println!("{i}");
             self.check_block_powered(pos, powered);
             self.tick();
         }
@@ -242,14 +244,24 @@ fn is_block_powered(block: Block) -> Option<bool> {
 }
 
 macro_rules! test_all_backends {
-    ($name:ident) => {
+    ($name:ident, optimize=false) => {
         paste::paste! {
             #[test]
             fn [< $name _redstone >]() { $name(TestBackend::Redstone) }
             #[test]
-            fn [< $name _rp_direct >]() { $name(TestBackend::Redpiler(::mchprs_redpiler::BackendVariant::Direct)) }
+            fn [< $name _rp_direct >]() { $name(TestBackend::Redpiler(::mchprs_redpiler::BackendVariant::Direct, false)) }
         }
     };
+    ($name:ident, optimize=true) => {
+        paste::paste! {
+            #[test]
+            fn [< $name _redstone >]() { $name(TestBackend::Redstone) }
+            #[test]
+            fn [< $name _rp_direct >]() { $name(TestBackend::Redpiler(::mchprs_redpiler::BackendVariant::Direct, false)) }
+            #[test]
+            fn [< $name _rp_direct_opt >]() { $name(TestBackend::Redpiler(::mchprs_redpiler::BackendVariant::Direct, true)) }
+        }
+    }
 }
 pub(crate) use test_all_backends;
 
@@ -292,6 +304,7 @@ pub fn make_repeater(
     repeater_pos: BlockPos,
     delay: u8,
     direction: BlockDirection,
+    powered: bool,
 ) {
     place_on_block(
         world,
@@ -300,7 +313,8 @@ pub fn make_repeater(
             repeater: RedstoneRepeater {
                 delay,
                 facing: direction,
-                ..Default::default()
+                locked: false,
+                powered,
             },
         },
     );

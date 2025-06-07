@@ -9,7 +9,7 @@ use crate::{CompilerInput, CompilerOptions};
 use mchprs_blocks::blocks::{Block, ButtonFace, LeverFace};
 use mchprs_blocks::{BlockDirection, BlockFace, BlockPos};
 use mchprs_redstone::{self, comparator, wire};
-use mchprs_world::World;
+use mchprs_world::{TickEntry, World};
 use petgraph::visit::NodeIndexable;
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
@@ -20,7 +20,9 @@ impl<W: World> Pass<W> for InputSearch {
     fn run_pass(
         &self,
         graph: &mut CompileGraph,
-        _: &CompilerOptions,
+        _options: &CompilerOptions,
+        _ticks: &mut Vec<TickEntry>,
+        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
         input: &CompilerInput<'_, W>,
     ) {
         let mut state = InputSearchState::new(input.world, graph);

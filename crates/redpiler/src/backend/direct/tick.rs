@@ -28,11 +28,16 @@ impl DirectBackend {
                     self.set_node(node_id, true, 15);
                 }
             }
-            NodeType::Torch => {
-                let should_be_powered = !get_bool_input(node);
+            NodeType::Torch { invert } => {
+                let mut should_be_powered = get_bool_input(node);
+                if invert { should_be_powered = !should_be_powered };
                 if node.powered != should_be_powered {
                     self.set_node(node_id, should_be_powered, bool_to_ss(should_be_powered));
                 }
+            }
+            NodeType::Chain { .. } => {
+                let should_be_powered = !node.powered;
+                self.set_node(node_id, should_be_powered, bool_to_ss(should_be_powered));
             }
             NodeType::Comparator {
                 mode, far_input, ..

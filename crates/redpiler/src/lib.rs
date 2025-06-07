@@ -12,6 +12,7 @@ use mchprs_world::{for_each_block_mut_optimized, World};
 use passes::make_default_pass_manager;
 use std::sync::Arc;
 use std::time::Instant;
+use rustc_hash::FxHashMap;
 use tracing::{debug, error, trace, warn};
 
 pub use task_monitor::TaskMonitor;
@@ -124,15 +125,23 @@ impl Compiler {
         world: &W,
         bounds: (BlockPos, BlockPos),
         options: CompilerOptions,
-        ticks: Vec<TickEntry>,
+        mut ticks: Vec<TickEntry>,
         monitor: Arc<TaskMonitor>,
     ) {
         debug!("Starting compile");
         let start = Instant::now();
 
+        let mut link_breaks = FxHashMap::default();
+
         let input = CompilerInput { world, bounds };
         let pass_manager = make_default_pass_manager::<W>();
-        let graph = pass_manager.run_passes(&options, &input, monitor.clone());
+        let graph = pass_manager.run_passes(
+            &options,
+            &mut ticks,
+            &mut link_breaks,
+            &input,
+            monitor.clone()
+        );
 
         if monitor.cancelled() {
             return;
@@ -157,7 +166,7 @@ impl Compiler {
             monitor.set_message("Compiling backend".to_string());
             let start = Instant::now();
 
-            jit.compile(graph, ticks, &options, monitor.clone());
+            jit.compile(graph, ticks, link_breaks, &options, monitor.clone());
 
             monitor.inc_progress();
             trace!("Backend compiled in {:?}", start.elapsed());
