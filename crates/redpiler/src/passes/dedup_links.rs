@@ -7,11 +7,10 @@
 
 use super::Pass;
 use crate::compile_graph::{CompileGraph, NodeIdx};
-use crate::{CompilerInput, CompilerOptions};
-use mchprs_world::{TickEntry, World};
+use crate::{CompilerInput, CompilerOptions, RuntimeAction};
+use mchprs_world::World;
 use petgraph::visit::{EdgeRef, NodeIndexable};
 use petgraph::Direction;
-use rustc_hash::FxHashMap;
 
 pub struct DedupLinks;
 
@@ -19,10 +18,9 @@ impl<W: World> Pass<W> for DedupLinks {
     fn run_pass(
         &self,
         graph: &mut CompileGraph,
-        _options: &CompilerOptions,
-        _ticks: &mut Vec<TickEntry>,
-        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
-        _input: &CompilerInput<'_, W>,
+        options: &CompilerOptions,
+        actions: &mut Vec<RuntimeAction>,
+        input: &CompilerInput<'_, W>,
     ) {
         for i in 0..graph.node_bound() {
             let idx = NodeIdx::new(i);

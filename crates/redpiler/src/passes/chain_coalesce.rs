@@ -1,17 +1,21 @@
+//! # [`ChainCoalesce`]
+//!
+//! This pass merges chains of repeaters and torches if they don't have any interaction with nodes outside the chain.
+
 use std::collections::VecDeque;
 use std::default::Default;
-use std::fmt::{Debug, Formatter};
 use itertools::Itertools;
 use petgraph::Direction;
+use petgraph::graph::NodeIndex;
 use petgraph::prelude::EdgeRef;
 use rustc_hash::FxHashMap;
 use tracing::{debug, trace, warn};
 use mchprs_blocks::BlockPos;
-use mchprs_redstone::bool_to_ss;
 use super::Pass;
 use crate::compile_graph::{CompileGraph, CompileLink, CompileNode, LinkType, NodeIdx, NodeState, NodeType};
-use crate::{backend, CompilerInput, CompilerOptions};
-use mchprs_world::{TickEntry, TickPriority, World};
+use crate::{CompilerInput, CompilerOptions, RuntimeAction};
+use mchprs_world::{TickPriority, World};
+use crate::backend::direct::TickScheduler;
 
 pub struct ChainCoalesce;
 
@@ -21,39 +25,22 @@ struct ChainBuilder {
     chain_map: FxHashMap<NodeIdx, usize>,
 }
 
+#[derive(Debug)]
 struct Chain {
     nodes: VecDeque<NodeIdx>,
-    base_block: (BlockPos, u32),
-    pos_map: FxHashMap<BlockPos, NodeIdx>,
-}
-
-impl Debug for Chain {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut f = f.debug_struct("Chain");
-        f.field("base_block", &self.base_block);
-        f.field("nodes", &self.nodes.iter().map(|idx| {
-            format!(
-                "{}",
-                self.pos_map.iter()
-                    .find(|(_, idx2)| *idx == **idx2)
-                    .unwrap_or((&BlockPos::new(0, 0, 0), idx)).0
-            )
-        }).collect_vec());
-        f.finish()
-    }
+    blocks: VecDeque<(BlockPos, u32)>,
 }
 
 impl<W: World> Pass<W> for ChainCoalesce {
     fn run_pass(
         &self,
         graph: &mut CompileGraph,
-        _options: &CompilerOptions,
-        ticks: &mut Vec<TickEntry>,
-        link_breaks: &mut FxHashMap<NodeIdx, usize>,
-        _input: &CompilerInput<'_, W>
+        options: &CompilerOptions,
+        actions: &mut Vec<RuntimeAction>,
+        input: &CompilerInput<'_, W>
     ) {
         let mut builder = ChainBuilder::default();
-        let num_coalesced = builder.coalesce_all(graph, ticks, link_breaks);
+        let num_coalesced = builder.coalesce_all(graph, actions);
         trace!("Iteration coalesced {} nodes", num_coalesced);
     }
 
@@ -63,6 +50,8 @@ impl<W: World> Pass<W> for ChainCoalesce {
 }
 
 impl ChainBuilder {
+    const MAX_LEN: usize = 255;
+
     fn new_chain(&mut self, chain: Chain) -> usize {
         let index = self.chains.len();
         for node in &chain.nodes {
@@ -85,8 +74,6 @@ impl ChainBuilder {
     }
 
     fn find_chain(&mut self, graph: &CompileGraph, node: NodeIdx) {
-        const MAX_LEN: usize = 255;
-
         let base_node = &graph[node];
         let base_block = base_node.block
             .expect("No base pos for chain");
@@ -106,7 +93,7 @@ impl ChainBuilder {
             let existing_chain = self.get_chain_index(target);
             if let Some(existing_chain) = existing_chain {
                 let other = &mut self.chains[existing_chain];
-                if other.len() + chain.len() <= MAX_LEN {
+                if other.len() + chain.len() <= Self::MAX_LEN {
                     debug!("Adding chain to chain: {:?} at {}", base_node.ty, base_block.0);
                     self.merge_chains(chain, existing_chain);
                     return;
@@ -122,14 +109,12 @@ impl ChainBuilder {
                 break 'chain;
             }
 
-            let pos = node.block
-                .expect("No pos for chain")
-                .0;
+            let block = node.block
+                .expect("No pos for chain");
 
             current_node = target;
-            debug!("Adding to chain: {:?} at {}", node.ty, pos);
-            chain.push_back(current_node, pos);
-            if chain.len() >= MAX_LEN {
+            chain.push_back(current_node, block);
+            if chain.len() >= Self::MAX_LEN {
                 break 'chain;
             }
         }
@@ -166,30 +151,28 @@ impl ChainBuilder {
     fn coalesce_all(
         &mut self,
         graph: &mut CompileGraph,
-        ticks: &mut Vec<TickEntry>,
-        link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        actions: &mut Vec<RuntimeAction>,
     ) -> usize {
         self.identify_chains(graph);
 
-        debug!("Chains: {:#?}", self.chains);
-
         let mut num_coalesced = 0;
         for chain in &self.chains {
-            num_coalesced += chain.coalesce(graph, ticks, link_breaks);
+            num_coalesced += chain.coalesce(graph, actions);
         }
         num_coalesced
     }
 }
 
 impl Chain {
+    const MAX_DELAY: usize = TickScheduler::NUM_QUEUES;
+
     fn new(node: NodeIdx, block: (BlockPos, u32)) -> Self {
         let mut chain = Chain {
             nodes: VecDeque::new(),
-            base_block: block,
-            pos_map: FxHashMap::default()
+            blocks: VecDeque::new(),
         };
         chain.nodes.push_back(node);
-        chain.pos_map.insert(block.0, node);
+        chain.blocks.push_back(block);
         chain
     }
 
@@ -197,27 +180,22 @@ impl Chain {
         self.nodes.len()
     }
 
-    fn push_back(&mut self, node: NodeIdx, pos: BlockPos) {
+    fn push_back(&mut self, node: NodeIdx, block: (BlockPos, u32)) {
         self.nodes.push_back(node);
-        self.pos_map.insert(pos, node);
+        self.blocks.push_back(block);
     }
 
     fn push_front(&mut self, other: Chain) {
         for i in (0..other.nodes.len()).rev() {
-            let node = other.nodes[i];
-            self.nodes.push_front(node);
+            self.nodes.push_front(other.nodes[i]);
+            self.blocks.push_front(other.blocks[i]);
         }
-        for (pos, idx) in &other.pos_map {
-            self.pos_map.insert(*pos, *idx);
-        }
-        self.base_block = other.base_block;
     }
 
     fn coalesce(
         &self,
         graph: &mut CompileGraph,
-        ticks: &mut Vec<TickEntry>,
-        link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        actions: &mut Vec<RuntimeAction>,
     ) -> usize {
         let Some(&last) = self.nodes.back() else {
             return 0;
@@ -258,16 +236,17 @@ impl Chain {
             return 0;
         }
 
-        if total_delay as usize > backend::direct::TickScheduler::NUM_QUEUES {
-            warn!("Chain delay bigger than scheduler queue!");
+        if total_delay as usize > Self::MAX_DELAY {
+            return 0;
         }
+
         let replacement = make_replacement(
             total_delay,
             facing_diode,
             max_comp_delay,
             has_torch,
             total_invert,
-            self.base_block,
+            &self.blocks,
         );
 
         if replacement.len() >= self.nodes.len() {
@@ -275,43 +254,29 @@ impl Chain {
             return 0;
         }
 
-        // Remove the block from the first decoupled node: it will be added to the new nodes
-        // (Duplicate block will cause issues with ticking)
-        let front = &mut graph[self.nodes[0]];
-        front.block = None;
-
-        let mut prev_powered = false;
-        for edge in graph.edges_directed(self.nodes[0], Direction::Incoming) {
-            let source = &graph[edge.source()];
-            // Chains may have been added in the process, ignore them
-            if !matches!(source.ty, NodeType::Chain { ..}) {
-                if source.state.powered {
-                    prev_powered = true;
-                }
-            }
-        }
+        let tick_second = if let Some(second) = replacement.get(1) {
+            matches!(second.ty, NodeType::Torch { .. })
+        } else {
+            false
+        };
 
         let replacement_idx = add_replacement(graph, replacement);
-        replace(graph, &self.nodes, replacement_idx);
+        replace(graph, &self.nodes, &replacement_idx);
 
-        let mut pending_tick = false;
-        for entry in ticks.iter() {
-            if entry.pos == self.base_block.0 {
-                pending_tick = true;
-            }
+        actions.push(RuntimeAction::Update(
+            *replacement_idx.first().unwrap()
+        ));
+        if tick_second {
+            actions.push(RuntimeAction::Tick(
+                *replacement_idx.get(1).unwrap(),
+                max_comp_delay as u32 + 1, // First repeater delay + 1
+                TickPriority::Normal,
+            ));
         }
-
-        // Do not add a tick if the previous block is not powered:
-        // The first repeater in the chain will power itself
-        if !pending_tick && prev_powered {
-            ticks.push(TickEntry {
-                ticks_left: 0, // Tick immediately, before starting execution
-                tick_priority: TickPriority::Normal,
-                pos: self.base_block.0,
-            });
-        }
-
-        link_breaks.insert(*self.nodes.back().unwrap(), total_delay as usize);
+        actions.push(RuntimeAction::BreakLink(
+            *self.nodes.back().unwrap(),
+            total_delay as u32
+        ));
 
         self.nodes.len()
     }
@@ -323,7 +288,7 @@ fn make_replacement(
     max_comp_delay: u8,
     has_torch: bool,
     invert: bool,
-    base_block: (BlockPos, u32),
+    blocks: &VecDeque<(BlockPos, u32)>,
 ) -> Vec<CompileNode> {
     let mut replacement = Vec::new();
     if !has_torch {
@@ -331,7 +296,7 @@ fn make_replacement(
             repeater(
                 max_comp_delay,
                 facing_diode,
-                Some(base_block),
+                blocks.front().cloned(),
             )
         );
         if total_delay > max_comp_delay {
@@ -339,6 +304,7 @@ fn make_replacement(
                 chain(
                     total_delay - max_comp_delay,
                     facing_diode,
+                    blocks.get(1).cloned(),
                 )
             );
         }
@@ -350,17 +316,18 @@ fn make_replacement(
         // Previous branch should have been triggered.
         panic!("Illegal state");
     } else {
-        // Total delay is always more than 1, if there is a torch
+        // Total delay is always more than 1 if there is a torch
         replacement.push(
             repeater(
                 max_comp_delay,
                 facing_diode,
-                Some(base_block),
+                blocks.front().cloned(),
             )
         );
         replacement.push(
             torch(
                 invert,
+                blocks.get(1).cloned(),
             )
         );
         if total_delay > max_comp_delay + 1 {
@@ -368,6 +335,7 @@ fn make_replacement(
                 chain(
                     total_delay - max_comp_delay - 1,
                     facing_diode,
+                    blocks.get(2).cloned(),
                 )
             );
         }
@@ -393,16 +361,16 @@ fn repeater(delay: u8, facing_diode: bool, block: Option<(BlockPos, u32)>) -> Co
     }
 }
 
-fn torch(invert: bool) -> CompileNode {
+fn torch(invert: bool, block: Option<(BlockPos, u32)>) -> CompileNode {
     CompileNode {
         ty: NodeType::Torch {
             invert,
         },
-        block: None,
+        block,
         state: NodeState {
-            powered: invert,
+            powered: false,
             repeater_locked: false,
-            output_strength: bool_to_ss(invert),
+            output_strength: 0,
         },
         is_input: false,
         is_output: false,
@@ -410,16 +378,13 @@ fn torch(invert: bool) -> CompileNode {
     }
 }
 
-fn chain(
-    delay: u8,
-    facing_diode: bool,
-) -> CompileNode {
+fn chain(delay: u8, facing_diode: bool, block: Option<(BlockPos, u32)>) -> CompileNode {
     CompileNode {
         ty: NodeType::Chain {
             delay,
             facing_diode,
         },
-        block: None,
+        block,
         state: NodeState {
             powered: false,
             repeater_locked: false,
@@ -431,7 +396,7 @@ fn chain(
     }
 }
 
-fn add_replacement(graph: &mut CompileGraph, replacement: Vec<CompileNode>) -> (NodeIdx, NodeIdx) {
+fn add_replacement(graph: &mut CompileGraph, replacement: Vec<CompileNode>) -> Vec<NodeIndex> {
     let mut replacement_idx = Vec::new();
     for node in replacement {
         replacement_idx.push(graph.add_node(node));
@@ -451,10 +416,10 @@ fn add_replacement(graph: &mut CompileGraph, replacement: Vec<CompileNode>) -> (
         );
     };
 
-    (*replacement_idx.first().unwrap(), *replacement_idx.last().unwrap())
+    replacement_idx
 }
 
-fn replace(graph: &mut CompileGraph, chain: &VecDeque<NodeIdx>, replacement: (NodeIdx, NodeIdx)) {
+fn replace(graph: &mut CompileGraph, chain: &VecDeque<NodeIdx>, replacement: &Vec<NodeIdx>) {
     let inputs = graph
         .edges_directed(*chain.front().unwrap(), Direction::Incoming)
         .map(|e| (e.id(), e.source(), e.weight().clone()))
@@ -469,7 +434,7 @@ fn replace(graph: &mut CompileGraph, chain: &VecDeque<NodeIdx>, replacement: (No
     for (_, node, weight) in &inputs {
         graph.add_edge(
             *node,
-            replacement.0,
+            *replacement.first().unwrap(),
             (*weight).clone(),
         );
     }
@@ -477,7 +442,7 @@ fn replace(graph: &mut CompileGraph, chain: &VecDeque<NodeIdx>, replacement: (No
     // Connect outputs to replacement
     for (node, weight) in outputs {
         graph.add_edge(
-            replacement.1,
+            *replacement.last().unwrap(),
             node,
             weight
         );
@@ -486,5 +451,11 @@ fn replace(graph: &mut CompileGraph, chain: &VecDeque<NodeIdx>, replacement: (No
     // Remove the original chain inputs
     for (idx, ..) in inputs {
         graph.remove_edge(idx);
+    }
+
+    // Remove blocks of decoupled nodes
+    // The same blocks will be used for some of the replacing nodes
+    for node in chain {
+        graph[*node].block = None;
     }
 }

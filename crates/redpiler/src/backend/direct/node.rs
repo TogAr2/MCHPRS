@@ -1,3 +1,5 @@
+use std::cmp::PartialEq;
+use std::fmt::Debug;
 use mchprs_blocks::blocks::ComparatorMode;
 use smallvec::SmallVec;
 use std::num::NonZeroU8;
@@ -19,7 +21,7 @@ impl NodeId {
 
 // This is Pretty Bad:tm: because one can create a NodeId using another instance of Nodes,
 // but at least some type system protection is better than none.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Nodes {
     pub nodes: Box<[Node]>,
 }
@@ -137,9 +139,17 @@ pub enum NodeType {
 }
 
 #[repr(align(16))]
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct NodeInput {
     pub ss_counts: [u8; 16],
+}
+
+impl Debug for NodeInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeInput")
+            .field("ss_counts", &format!("{:?}", self.ss_counts))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -155,7 +165,7 @@ impl NonMaxU8 {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Node {
     pub ty: NodeType,
     pub default_inputs: NodeInput,
@@ -165,7 +175,7 @@ pub struct Node {
 
     /// Powered or lit
     pub powered: bool,
-    /// Only for repeaters
+    /// Locked for repeaters, or base powered for chains
     pub locked: bool,
     pub output_power: u8,
     pub changed: bool,

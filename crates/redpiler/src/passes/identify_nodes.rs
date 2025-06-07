@@ -9,13 +9,13 @@
 
 use super::Pass;
 use crate::compile_graph::{Annotations, CompileGraph, CompileNode, NodeIdx, NodeState, NodeType};
-use crate::{CompilerInput, CompilerOptions};
+use crate::{CompilerInput, CompilerOptions, RuntimeAction};
 use itertools::Itertools;
 use mchprs_blocks::block_entities::BlockEntity;
 use mchprs_blocks::blocks::Block;
 use mchprs_blocks::{BlockDirection, BlockFace, BlockPos};
 use mchprs_redstone::{self, comparator, noteblock, wire};
-use mchprs_world::{for_each_block_optimized, TickEntry, World};
+use mchprs_world::{for_each_block_optimized, World};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use tracing::warn;
@@ -26,8 +26,7 @@ impl<W: World> Pass<W> for IdentifyNodes {
         &self,
         graph: &mut CompileGraph,
         options: &CompilerOptions,
-        _ticks: &mut Vec<TickEntry>,
-        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
+        actions: &mut Vec<RuntimeAction>,
         input: &CompilerInput<'_, W>,
     ) {
         let ignore_wires = options.optimize;

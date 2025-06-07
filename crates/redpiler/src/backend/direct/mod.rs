@@ -6,9 +6,9 @@ mod tick;
 mod update;
 
 use super::JITBackend;
-use crate::compile_graph::{CompileGraph, NodeIdx};
+use crate::compile_graph::CompileGraph;
 use crate::task_monitor::TaskMonitor;
-use crate::{block_powered_mut, CompilerOptions};
+use crate::{block_powered_mut, CompilerOptions, RuntimeAction};
 use mchprs_blocks::block_entities::BlockEntity;
 use mchprs_blocks::blocks::{Block, ComparatorMode, Instrument};
 use mchprs_blocks::BlockPos;
@@ -77,7 +77,11 @@ impl TickScheduler {
     }
 
     fn schedule_tick(&mut self, node: NodeId, delay: usize, priority: TickPriority) {
-        self.queues_deque[(self.pos + delay) % Self::NUM_QUEUES].0[priority as usize].push(node);
+        self.queues_deque[self.get_index(delay)].0[priority as usize].push(node);
+    }
+
+    fn get_index(&self, delay: usize) -> usize {
+        (self.pos + delay) % Self::NUM_QUEUES
     }
 
     fn queues_this_tick(&mut self) -> Queues {
@@ -134,7 +138,8 @@ impl DirectBackend {
     }
 
     fn schedule_link_break(&mut self, node_id: NodeId, delay: usize) {
-        self.link_break.entry(delay).or_insert(Vec::new()).push(node_id);
+        let index = self.scheduler.get_index(delay);
+        self.link_break.entry(index).or_insert(Vec::new()).push(node_id);
     }
 
     fn break_link(&mut self, node_id: NodeId) {
@@ -303,11 +308,11 @@ impl JITBackend for DirectBackend {
         &mut self,
         graph: CompileGraph,
         ticks: Vec<TickEntry>,
-        link_breaks: FxHashMap<NodeIdx, usize>,
+        actions: Vec<RuntimeAction>,
         options: &CompilerOptions,
         monitor: Arc<TaskMonitor>,
     ) {
-        compile::compile(self, graph, ticks, link_breaks, options, monitor);
+        compile::compile(self, graph, ticks, actions, options, monitor);
     }
 
     fn has_pending_ticks(&self) -> bool {
@@ -358,11 +363,6 @@ fn last_index_positive(array: &[u8; 16]) -> u32 {
     } else {
         15 - (value.leading_zeros() >> 3)
     }
-}
-
-fn get_ss_count_for_max(array: &[u8; 16]) -> u8 {
-    let index = last_index_positive(array);
-    array[index as usize]
 }
 
 fn get_all_input(node: &Node) -> (u8, u8) {

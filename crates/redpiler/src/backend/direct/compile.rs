@@ -1,5 +1,5 @@
 use crate::compile_graph::{CompileGraph, LinkType, NodeIdx};
-use crate::{CompilerOptions, TaskMonitor};
+use crate::{CompilerOptions, RuntimeAction, TaskMonitor};
 use itertools::Itertools;
 use mchprs_blocks::blocks::{Block, Instrument};
 use mchprs_blocks::BlockPos;
@@ -9,7 +9,8 @@ use petgraph::Direction;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
-use tracing::trace;
+use tracing::{trace, warn};
+use crate::backend::direct::update::update_node;
 use super::node::{ForwardLink, Node, NodeId, NodeInput, NodeType, Nodes, NonMaxU8};
 use super::DirectBackend;
 
@@ -106,11 +107,9 @@ fn compile_node(
         CNodeType::Chain {
             delay,
             facing_diode,
-        } => {
-            NodeType::Chain {
-                delay: *delay,
-                facing_diode: *facing_diode,
-            }
+        } => NodeType::Chain {
+            delay: *delay,
+            facing_diode: *facing_diode,
         },
         CNodeType::Comparator {
             mode,
@@ -153,18 +152,14 @@ pub fn compile(
     backend: &mut DirectBackend,
     graph: CompileGraph,
     ticks: Vec<TickEntry>,
-    link_breaks: FxHashMap<NodeIdx, usize>,
+    actions: Vec<RuntimeAction>,
     options: &CompilerOptions,
     _monitor: Arc<TaskMonitor>,
 ) {
     // Create a mapping from compile to backend node indices
     let mut nodes_map = FxHashMap::with_capacity_and_hasher(graph.node_count(), Default::default());
     for node in graph.node_indices() {
-        let idx = nodes_map.len();
-        nodes_map.insert(node, idx);
-        if let Some(tick) = link_breaks.get(&node) {
-            backend.schedule_link_break(unsafe { NodeId::from_index(idx) }, *tick);
-        }
+        nodes_map.insert(node, nodes_map.len());
     }
     let nodes_len = nodes_map.len();
 
@@ -202,13 +197,50 @@ pub fn compile(
     // Schedule backend ticks
     for entry in ticks {
         if let Some(node) = backend.pos_map.get(&entry.pos) {
-            if entry.ticks_left == 0 {
-                backend.tick_node(*node);
-            } else {
-                backend
-                    .scheduler
-                    .schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
-                backend.nodes[*node].pending_tick = true;
+            backend
+                .scheduler
+                .schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
+            backend.nodes[*node].pending_tick = true;
+        }
+    }
+
+    // Execute all requested actions
+    for action in actions {
+        match action {
+            RuntimeAction::Update(node) => {
+                let id = nodes_map.get(&node);
+                if let Some(id) = id {
+                    let node = unsafe { NodeId::from_index(*id) };
+                    update_node(
+                        &mut backend.scheduler,
+                        &mut backend.events,
+                        &mut backend.nodes,
+                        node,
+                    );
+                } else {
+                    warn!("Tried to update unknown node idx {:?}", node);
+                }
+            }
+            RuntimeAction::Tick(node, delay, priority) => {
+                let id = nodes_map.get(&node);
+                if let Some(id) = id {
+                    let node = unsafe { NodeId::from_index(*id) };
+                    backend
+                        .scheduler
+                        .schedule_tick(node, delay as usize, priority);
+                    backend.nodes[node].pending_tick = true;
+                } else {
+                    warn!("Tried to schedule tick for unknown node idx {:?}", node);
+                }
+            }
+            RuntimeAction::BreakLink(node, delay) => {
+                let id = nodes_map.get(&node);
+                if let Some(id) = id {
+                    let node = unsafe { NodeId::from_index(*id) };
+                    backend.schedule_link_break(node, delay as usize);
+                } else {
+                    warn!("Tried to schedule link break for unknown node idx {:?}", node);
+                }
             }
         }
     }

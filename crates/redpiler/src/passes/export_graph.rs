@@ -1,9 +1,9 @@
 use super::Pass;
 use crate::compile_graph::{CompileGraph, LinkType as CLinkType, NodeIdx, NodeType as CNodeType};
-use crate::{CompilerInput, CompilerOptions};
+use crate::{CompilerInput, CompilerOptions, RuntimeAction};
 use itertools::Itertools;
 use mchprs_blocks::blocks::ComparatorMode as CComparatorMode;
-use mchprs_world::{TickEntry, World};
+use mchprs_world::World;
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use redpiler_graph::{
@@ -96,10 +96,9 @@ impl<W: World> Pass<W> for ExportGraph {
     fn run_pass(
         &self,
         graph: &mut CompileGraph,
-        _options: &CompilerOptions,
-        _ticks: &mut Vec<TickEntry>,
-        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
-        _input: &CompilerInput<'_, W>,
+        options: &CompilerOptions,
+        actions: &mut Vec<RuntimeAction>,
+        input: &CompilerInput<'_, W>,
     ) {
         let mut nodes_map =
             FxHashMap::with_capacity_and_hasher(graph.node_count(), Default::default());

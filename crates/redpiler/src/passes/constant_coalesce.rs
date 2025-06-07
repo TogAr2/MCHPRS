@@ -2,8 +2,8 @@ use std::collections::hash_map::Entry;
 
 use super::Pass;
 use crate::compile_graph::{CompileGraph, CompileNode, NodeIdx, NodeState, NodeType};
-use crate::{CompilerInput, CompilerOptions};
-use mchprs_world::{TickEntry, World};
+use crate::{CompilerInput, CompilerOptions, RuntimeAction};
+use mchprs_world::World;
 use petgraph::unionfind::UnionFind;
 use petgraph::visit::{EdgeRef, IntoEdgeReferences, NodeIndexable};
 use petgraph::Direction;
@@ -15,10 +15,9 @@ impl<W: World> Pass<W> for ConstantCoalesce {
     fn run_pass(
         &self,
         graph: &mut CompileGraph,
-        _options: &CompilerOptions,
-        _ticks: &mut Vec<TickEntry>,
-        _link_breaks: &mut FxHashMap<NodeIdx, usize>,
-        _input: &CompilerInput<'_, W>
+        options: &CompilerOptions,
+        actions: &mut Vec<RuntimeAction>,
+        input: &CompilerInput<'_, W>
     ) {
         let mut vertex_sets = UnionFind::new(graph.node_bound());
         for edge in graph.edge_references() {

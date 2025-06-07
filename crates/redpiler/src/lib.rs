@@ -7,15 +7,15 @@ mod passes;
 use backend::{BackendDispatcher, JITBackend};
 use mchprs_blocks::blocks::Block;
 use mchprs_blocks::BlockPos;
-use mchprs_world::TickEntry;
+use mchprs_world::{TickEntry, TickPriority};
 use mchprs_world::{for_each_block_mut_optimized, World};
 use passes::make_default_pass_manager;
 use std::sync::Arc;
 use std::time::Instant;
-use rustc_hash::FxHashMap;
 use tracing::{debug, error, trace, warn};
 
 pub use task_monitor::TaskMonitor;
+use crate::compile_graph::NodeIdx;
 
 fn block_powered_mut(block: &mut Block) -> Option<&mut bool> {
     Some(match block {
@@ -95,6 +95,12 @@ impl CompilerOptions {
     }
 }
 
+pub enum RuntimeAction {
+    Update(NodeIdx),
+    Tick(NodeIdx, u32, TickPriority),
+    BreakLink(NodeIdx, u32),
+}
+
 #[derive(Default)]
 pub struct Compiler {
     is_active: bool,
@@ -125,20 +131,19 @@ impl Compiler {
         world: &W,
         bounds: (BlockPos, BlockPos),
         options: CompilerOptions,
-        mut ticks: Vec<TickEntry>,
+        ticks: Vec<TickEntry>,
         monitor: Arc<TaskMonitor>,
     ) {
         debug!("Starting compile");
         let start = Instant::now();
 
-        let mut link_breaks = FxHashMap::default();
+        let mut actions = Vec::new();
 
         let input = CompilerInput { world, bounds };
         let pass_manager = make_default_pass_manager::<W>();
         let graph = pass_manager.run_passes(
             &options,
-            &mut ticks,
-            &mut link_breaks,
+            &mut actions,
             &input,
             monitor.clone()
         );
@@ -166,7 +171,7 @@ impl Compiler {
             monitor.set_message("Compiling backend".to_string());
             let start = Instant::now();
 
-            jit.compile(graph, ticks, link_breaks, &options, monitor.clone());
+            jit.compile(graph, ticks, actions, &options, monitor.clone());
 
             monitor.inc_progress();
             trace!("Backend compiled in {:?}", start.elapsed());

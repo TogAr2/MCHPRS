@@ -51,10 +51,6 @@ pub(super) fn update_node(
             delay,
             facing_diode,
         } => {
-            // if node.pending_tick {
-            //     return;
-            // }
-
             let should_be_powered = get_bool_input(node);
             if should_be_powered != node.locked {
                 node.locked = should_be_powered; // We use locked as prev_powered to save space
