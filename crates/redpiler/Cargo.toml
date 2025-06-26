@@ -17,3 +17,6 @@ itertools = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 enum_dispatch = { workspace = true }
+bytemuck = { workspace = true }
+wgpu = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt-multi-thread", "macros"] }

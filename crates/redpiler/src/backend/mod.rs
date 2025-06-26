@@ -1,4 +1,5 @@
 pub mod direct;
+pub mod gpu;
 
 use std::sync::Arc;
 
@@ -36,8 +37,10 @@ pub trait JITBackend {
 }
 
 use direct::DirectBackend;
+use crate::backend::gpu::GpuBackend;
 
 #[enum_dispatch(JITBackend)]
 pub enum BackendDispatcher {
     DirectBackend,
+    GpuBackend,
 }

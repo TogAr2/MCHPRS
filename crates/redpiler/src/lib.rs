@@ -15,6 +15,7 @@ use std::time::Instant;
 use tracing::{debug, error, trace, warn};
 
 pub use task_monitor::TaskMonitor;
+use crate::backend::gpu;
 
 fn block_powered_mut(block: &mut Block) -> Option<&mut bool> {
     Some(match block {
@@ -54,6 +55,7 @@ pub struct CompilerOptions {
 pub enum BackendVariant {
     #[default]
     Direct,
+    GPU
 }
 
 impl CompilerOptions {
@@ -69,6 +71,7 @@ impl CompilerOptions {
                     "--update" => co.update = true,
                     "--export-dot" => co.export_dot_graph = true,
                     "--wire-dot-out" => co.wire_dot_out = true,
+                    "--gpu" => co.backend_variant = BackendVariant::GPU,
                     // FIXME: use actual error handling
                     _ => warn!("Unrecognized option: {}", option),
                 }
@@ -142,12 +145,16 @@ impl Compiler {
             Some(BackendDispatcher::DirectBackend(_)) => {
                 options.backend_variant != BackendVariant::Direct
             }
+            Some(BackendDispatcher::GpuBackend(_)) => {
+                options.backend_variant == BackendVariant::GPU
+            }
             None => true,
         };
         if replace_jit {
             debug!("Switching jit backend to {:?}", options.backend_variant);
             let jit = match options.backend_variant {
                 BackendVariant::Direct => BackendDispatcher::DirectBackend(Default::default()),
+                BackendVariant::GPU => BackendDispatcher::GpuBackend(gpu::GpuBackend::create()),
             };
             self.use_jit(jit);
         }
