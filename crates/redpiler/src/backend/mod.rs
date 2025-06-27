@@ -36,8 +36,10 @@ pub trait JITBackend {
 }
 
 use direct::DirectBackend;
+use direct::partitioned::PartitionedBackend;
 
 #[enum_dispatch(JITBackend)]
 pub enum BackendDispatcher {
     DirectBackend,
+    PartitionedBackend,
 }

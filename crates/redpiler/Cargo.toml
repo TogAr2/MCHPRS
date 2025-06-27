@@ -17,3 +17,5 @@ itertools = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 enum_dispatch = { workspace = true }
+tokio = { version = "1.45.1", features = ["rt-multi-thread", "sync"]}
+futures = "0.3.31"

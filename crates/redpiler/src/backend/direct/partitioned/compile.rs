@@ -9,10 +9,11 @@ use petgraph::Direction;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::trace;
-
-use super::node::{DirectForwardLink, ForwardLink, Node, NodeId, NodeInput, NodeType, Nodes, NonMaxU8};
-use super::DirectBackend;
+use crate::backend::direct::node::{Node, NodeId, NodeInput, NodeType, Nodes, NonMaxU8};
+use crate::backend::direct::partitioned::partition::{NodeLocation, PartitionForwardLink};
+use crate::backend::direct::partitioned::{GlobalMessage, Partition, PartitionInterface, PartitionMessage, PartitionedBackend};
 
 #[derive(Debug, Default)]
 struct FinalGraphStats {
@@ -25,8 +26,7 @@ struct FinalGraphStats {
 fn compile_node(
     graph: &CompileGraph,
     node_idx: NodeIdx,
-    nodes_len: usize,
-    nodes_map: &FxHashMap<NodeIdx, usize>,
+    nodes_map: &FxHashMap<NodeIdx, NodeLocation>,
     noteblock_info: &mut Vec<(BlockPos, Instrument, u32)>,
     stats: &mut FinalGraphStats,
 ) -> Node {
@@ -71,19 +71,16 @@ fn compile_node(
     let updates = if node.ty != CNodeType::Constant {
         graph
             .edges_directed(node_idx, Direction::Outgoing)
+            // Sorting by node location allows for optimization when executing
             .sorted_by_key(|edge| nodes_map[&edge.target()])
             .into_group_map_by(|edge| std::mem::discriminant(&graph[edge.target()].ty))
             .into_values()
             .flatten()
-            .map(|edge| unsafe {
+            .map(|edge| {
                 let idx = edge.target();
-                let idx = nodes_map[&idx];
-                assert!(idx < nodes_len);
-                // Safety: bounds checked
-                let target_id = NodeId::from_index(idx);
-
+                let location = nodes_map[&idx];
                 let weight = edge.weight();
-                DirectForwardLink::new(target_id, weight.ty == LinkType::Side, weight.ss).data()
+                PartitionForwardLink::new(location, weight.ty == LinkType::Side, weight.ss).data()
             })
             .collect()
     } else {
@@ -138,57 +135,102 @@ fn compile_node(
 }
 
 pub fn compile(
-    backend: &mut DirectBackend,
+    backend: &mut PartitionedBackend,
     graph: CompileGraph,
     ticks: Vec<TickEntry>,
     options: &CompilerOptions,
     _monitor: Arc<TaskMonitor>,
-) {
-    // Create a mapping from compile to backend node indices
+) -> Vec<Partition> {
+    let partition_size = graph.node_count()
+        .div_ceil(PartitionedBackend::MAX_PARTITIONS)
+        .max(PartitionedBackend::MIN_PARTITION_SIZE);
+    let partition_count = graph.node_count().div_ceil(partition_size);
+
+    backend.blocks.clear();
+
+    // Create a mapping from compile to backend node locations
     let mut nodes_map = FxHashMap::with_capacity_and_hasher(graph.node_count(), Default::default());
-    for node in graph.node_indices() {
-        nodes_map.insert(node, nodes_map.len());
+    for (i, node) in graph.node_indices().enumerate() {
+        let partition = i / partition_size;
+        let node_id = i % partition_size;
+        let location = unsafe {
+            // Safety: we know it will be a valid location given the context
+            NodeLocation::from(partition, node_id)
+        };
+        nodes_map.insert(node, location);
+
+        let block = graph[node].block.map(|(pos, id)| (pos, Block::from_id(id)));
+        if let Some(block) = block {
+            backend.blocks.insert(location, block);
+        }
     }
     let nodes_len = nodes_map.len();
 
     // Lower nodes
     let mut stats = FinalGraphStats::default();
-    let nodes = graph
-        .node_indices()
-        .map(|idx| {
-            compile_node(
-                &graph,
-                idx,
-                nodes_len,
-                &nodes_map,
-                &mut backend.noteblock_info,
-                &mut stats,
-            )
+
+    let (
+        mut global_tx,
+        mut global_rx,
+        mut partition_tx,
+        mut partition_rx
+    ) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for _ in 0..partition_count {
+        let global = tokio::sync::mpsc::unbounded_channel::<GlobalMessage>();
+        let partition = tokio::sync::mpsc::unbounded_channel::<PartitionMessage>();
+        global_tx.push(global.0);
+        global_rx.push(global.1);
+        partition_tx.push(partition.0);
+        partition_rx.push(Some(partition.1));
+    }
+    let partition_tx: Arc<[UnboundedSender<PartitionMessage>]> = Arc::from(partition_tx);
+
+    let mut partitions = Vec::with_capacity(partition_count);
+    let mut curr_nodes: Vec<Node> = Vec::with_capacity(partition_size);
+    for (i, node) in graph.node_indices().enumerate() {
+        curr_nodes.push(compile_node(
+            &graph,
+            node,
+            &nodes_map,
+            &mut backend.noteblock_info,
+            &mut stats,
+        ));
+
+        if curr_nodes.len() == partition_size || i == graph.node_count() - 1 {
+            let partition_idx = i / partition_size;
+            let mut temp = Vec::with_capacity(partition_size);
+            std::mem::swap(&mut temp, &mut curr_nodes);
+            let nodes = Nodes::new(temp.into_boxed_slice());
+
+            partitions.push(Partition::new(
+                partition_idx,
+                nodes,
+                global_tx[partition_idx].clone(),
+                partition_tx.clone(),
+                partition_rx[partition_idx].take().unwrap()
+            ));
+        }
+    }
+
+    backend.partitions = global_rx.into_iter().zip(partition_tx.iter()).zip(partitions.iter())
+        .map(|((global_rx, partition_tx), partition)| {
+            PartitionInterface::new(partition_tx.clone(), global_rx, partition.nodes.clone())
         })
         .collect();
+
     stats.nodes_bytes = nodes_len * std::mem::size_of::<Node>();
     trace!("{:#?}", stats);
 
-    backend.blocks = graph
-        .node_weights()
-        .map(|node| node.block.map(|(pos, id)| (pos, Block::from_id(id))))
-        .collect();
-    backend.nodes = Nodes::new(nodes);
-
-    // Create a mapping from block pos to backend NodeId
-    for i in 0..backend.blocks.len() {
-        if let Some((pos, _)) = backend.blocks[i] {
-            backend.pos_map.insert(pos, backend.nodes.get(i));
-        }
+    backend.pos_map.clear();
+    // Create a mapping from block pos to backend NodeLocation
+    for (location, block) in &backend.blocks {
+        backend.pos_map.insert(block.0, *location);
     }
 
     // Schedule backend ticks
     for entry in ticks {
         if let Some(node) = backend.pos_map.get(&entry.pos) {
-            backend
-                .scheduler
-                .schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
-            backend.nodes[*node].pending_tick = true;
+            backend.cross_schedule_tick(*node, entry.ticks_left as usize, entry.tick_priority);
         }
     }
 
@@ -196,4 +238,6 @@ pub fn compile(
     if options.export_dot_graph {
         std::fs::write("backend_graph.dot", format!("{}", backend)).unwrap();
     }
+
+    partitions
 }

@@ -1,10 +1,11 @@
+use std::cmp::Ordering;
 use mchprs_blocks::blocks::ComparatorMode;
 use smallvec::SmallVec;
 use std::num::NonZeroU8;
 use std::ops::{Index, IndexMut};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct NodeId(u32);
+pub struct NodeId(pub u32);
 
 impl NodeId {
     pub fn index(self) -> usize {
@@ -17,11 +18,23 @@ impl NodeId {
     }
 }
 
+impl PartialOrd for NodeId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NodeId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.index().cmp(&other.index())
+    }
+}
+
 // This is Pretty Bad:tm: because one can create a NodeId using another instance of Nodes,
 // but at least some type system protection is better than none.
-#[derive(Default)]
+#[derive(Default, Debug, Clone)]
 pub struct Nodes {
-    pub nodes: Box<[Node]>,
+    nodes: Box<[Node]>,
 }
 
 impl Nodes {
@@ -65,43 +78,85 @@ impl IndexMut<NodeId> for Nodes {
     }
 }
 
+pub trait ForwardLink<I>: Copy + Clone {
+    fn node(self) -> I;
+    fn side(self) -> bool;
+    fn ss(self) -> u8;
+}
+
 #[derive(Clone, Copy)]
-pub struct ForwardLink {
+pub struct ForwardLinkData {
     data: u32,
 }
 
-impl ForwardLink {
+impl ForwardLinkData {
+    /// Safety: data must be valid in the context of the backend
+    pub unsafe fn new(data: u32) -> Self {
+        Self { data }
+    }
+
+    pub fn inner(self) -> u32 {
+        self.data
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DirectForwardLink {
+    data: ForwardLinkData,
+}
+
+impl DirectForwardLink {
     pub fn new(id: NodeId, side: bool, ss: u8) -> Self {
         assert!(id.index() < (1 << 27));
         // the clamp_weights compile pass should ensure ss < 15
         assert!(ss < 15);
-        Self {
-            data: (id.index() as u32) << 5 | if side { 1 << 4 } else { 0 } | ss as u32,
-        }
-    }
-
-    pub fn node(self) -> NodeId {
         unsafe {
-            // safety: ForwardLink is constructed using a NodeId
-            NodeId::from_index((self.data >> 5) as usize)
+            Self {
+                data: ForwardLinkData::new((id.index() as u32) << 5 | if side { 1 << 4 } else { 0 } | ss as u32)
+            }
         }
     }
 
-    pub fn side(self) -> bool {
-        self.data & (1 << 4) != 0
+    pub fn data(self) -> ForwardLinkData {
+        self.data
     }
 
-    pub fn ss(self) -> u8 {
-        (self.data & 0b1111) as u8
+    pub fn inner(self) -> u32 {
+        self.data.inner()
     }
 }
 
-impl std::fmt::Debug for ForwardLink {
+impl From<ForwardLinkData> for DirectForwardLink {
+    fn from(data: ForwardLinkData) -> Self {
+        Self { data }
+    }
+}
+
+impl ForwardLink<NodeId> for DirectForwardLink {
+    fn node(self) -> NodeId {
+        unsafe {
+            // safety: ForwardLink is constructed using a NodeId
+            NodeId::from_index((self.inner() >> 5) as usize)
+        }
+    }
+
+    fn side(self) -> bool {
+        self.inner() & (1 << 4) != 0
+    }
+
+    fn ss(self) -> u8 {
+        (self.inner() & 0b1111) as u8
+    }
+}
+
+impl std::fmt::Debug for ForwardLinkData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        //TODO this only accounts for direct backend
+        let link: DirectForwardLink = (*self).into();
         f.debug_struct("ForwardLink")
-            .field("node", &self.node())
-            .field("side", &self.side())
-            .field("ss", &self.ss())
+            .field("node", &link.node())
+            .field("side", &link.side())
+            .field("ss", &link.ss())
             .finish()
     }
 }
@@ -154,7 +209,7 @@ pub struct Node {
     pub ty: NodeType,
     pub default_inputs: NodeInput,
     pub side_inputs: NodeInput,
-    pub updates: SmallVec<[ForwardLink; 10]>,
+    pub updates: SmallVec<[ForwardLinkData; 10]>,
     pub is_io: bool,
 
     /// Powered or lit

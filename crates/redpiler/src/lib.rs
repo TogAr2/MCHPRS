@@ -54,6 +54,7 @@ pub struct CompilerOptions {
 pub enum BackendVariant {
     #[default]
     Direct,
+    Partitioned,
 }
 
 impl CompilerOptions {
@@ -69,6 +70,7 @@ impl CompilerOptions {
                     "--update" => co.update = true,
                     "--export-dot" => co.export_dot_graph = true,
                     "--wire-dot-out" => co.wire_dot_out = true,
+                    "--partition" => co.backend_variant = BackendVariant::Partitioned,
                     // FIXME: use actual error handling
                     _ => warn!("Unrecognized option: {}", option),
                 }
@@ -81,6 +83,7 @@ impl CompilerOptions {
                         "i" => co.io_only = true,
                         "u" => co.update = true,
                         "d" => co.wire_dot_out = true,
+                        "p" => co.backend_variant = BackendVariant::Partitioned,
                         // FIXME: use actual error handling
                         _ => warn!("Unrecognized option: -{}", c),
                     }
@@ -141,6 +144,9 @@ impl Compiler {
         let replace_jit = match self.jit {
             Some(BackendDispatcher::DirectBackend(_)) => {
                 options.backend_variant != BackendVariant::Direct
+            },
+            Some(BackendDispatcher::PartitionedBackend(_)) => {
+                options.backend_variant != BackendVariant::Partitioned
             }
             None => true,
         };
@@ -148,6 +154,7 @@ impl Compiler {
             debug!("Switching jit backend to {:?}", options.backend_variant);
             let jit = match options.backend_variant {
                 BackendVariant::Direct => BackendDispatcher::DirectBackend(Default::default()),
+                BackendVariant::Partitioned => BackendDispatcher::PartitionedBackend(Default::default()),
             };
             self.use_jit(jit);
         }

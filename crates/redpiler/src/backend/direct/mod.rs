@@ -4,6 +4,7 @@ mod compile;
 mod node;
 mod tick;
 mod update;
+pub(crate) mod partitioned;
 
 use super::JITBackend;
 use crate::compile_graph::CompileGraph;
@@ -19,7 +20,9 @@ use node::{Node, NodeId, NodeType, Nodes};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::{fmt, mem};
+use std::ops::DerefMut;
 use tracing::{debug, warn};
+use crate::backend::direct::node::{DirectForwardLink, ForwardLink};
 
 #[derive(Default, Clone)]
 struct Queues([Vec<NodeId>; TickScheduler::NUM_PRIORITIES]);
@@ -42,7 +45,8 @@ impl TickScheduler {
     const NUM_PRIORITIES: usize = 4;
     const NUM_QUEUES: usize = 16;
 
-    fn reset<W: World>(&mut self, world: &mut W, blocks: &[Option<(BlockPos, Block)>]) {
+    fn reset_get_tick_entries(&mut self, blocks: &[Option<(BlockPos, Block)>]) -> Vec<TickEntry> {
+        let mut tick_entries = Vec::new();
         for (idx, queues) in self.queues_deque.iter().enumerate() {
             let delay = if self.pos >= idx {
                 idx + Self::NUM_QUEUES
@@ -55,7 +59,11 @@ impl TickScheduler {
                         warn!("Cannot schedule tick for node {:?} because block information is missing", node);
                         continue;
                     };
-                    world.schedule_tick(pos, delay as u32, priority);
+                    tick_entries.push(TickEntry {
+                        ticks_left: delay as u32,
+                        tick_priority: priority,
+                        pos,
+                    });
                 }
             }
         }
@@ -63,6 +71,14 @@ impl TickScheduler {
             for queue in queues.0.iter_mut() {
                 queue.clear();
             }
+        }
+        tick_entries
+    }
+
+    fn reset<W: World>(&mut self, world: &mut W, blocks: &[Option<(BlockPos, Block)>]) {
+        let tick_entries = self.reset_get_tick_entries(blocks);
+        for entry in tick_entries {
+            world.schedule_tick(entry.pos, entry.ticks_left, entry.tick_priority);
         }
     }
 
@@ -103,6 +119,7 @@ impl TickScheduler {
     }
 }
 
+#[derive(Clone)]
 enum Event {
     NoteBlockPlay { noteblock_id: u16 },
 }
@@ -131,7 +148,8 @@ impl DirectBackend {
         node.output_power = new_power;
         for i in 0..node.updates.len() {
             let node = &self.nodes[node_id];
-            let update_link = unsafe { *node.updates.get_unchecked(i) };
+            let update_data = unsafe { *node.updates.get_unchecked(i) };
+            let update_link = DirectForwardLink::from(update_data);
             let side = update_link.side();
             let distance = update_link.ss();
             let update = update_link.node();
@@ -384,6 +402,7 @@ impl fmt::Display for DirectBackend {
             };
             writeln!(f, "    n{} [ label = \"{}\\n({})\" ];", id, label, pos)?;
             for link in node.updates.iter() {
+                let link = DirectForwardLink::from(*link);
                 let out_index = link.node().index();
                 let distance = link.ss();
                 let color = if link.side() { ",color=\"blue\"" } else { "" };
